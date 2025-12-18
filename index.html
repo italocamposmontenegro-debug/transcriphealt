@@ -1,0 +1,333 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>TranscripHealth</title>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      margin: 0;
+      padding: 20px;
+      background: #f8f9fa;
+    }
+    h1 {
+      text-align: center;
+      margin-bottom: 20px;
+    }
+    .controls {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      justify-content: center;
+      margin-bottom: 20px;
+    }
+    button {
+      padding: 10px 20px;
+      font-size: 14px;
+      cursor: pointer;
+      border: none;
+      border-radius: 4px;
+      background-color: #0d6efd;
+      color: #fff;
+    }
+    button:disabled {
+      background-color: #6c757d;
+      cursor: not-allowed;
+    }
+    #itemsList {
+      margin-bottom: 20px;
+    }
+    .item {
+      background: #fff;
+      border: 1px solid #dee2e6;
+      padding: 10px;
+      margin-bottom: 8px;
+      border-radius: 4px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    .item .info {
+      flex: 1;
+    }
+    .item button {
+      background-color: #dc3545;
+      margin-left: 8px;
+    }
+    .item button.edit {
+      background-color: #198754;
+    }
+    #templateSection {
+      margin-bottom: 20px;
+    }
+    #templateTextarea {
+      width: 100%;
+      height: 150px;
+      padding: 10px;
+      font-family: monospace;
+    }
+    #reportSection pre {
+      background: #fff;
+      border: 1px solid #dee2e6;
+      padding: 10px;
+      white-space: pre-wrap;
+      word-wrap: break-word;
+    }
+  </style>
+</head>
+<body>
+  <h1>TranscripHealth</h1>
+  <div class="controls">
+    <button id="startBtn">Iniciar Grabación</button>
+    <button id="stopBtn" disabled>Detener Grabación</button>
+    <button id="finishBtn">Finalizar Evaluación</button>
+  </div>
+
+  <h2>Pruebas Registradas</h2>
+  <div id="itemsList"></div>
+
+  <h2>Plantilla del Informe (única)</h2>
+  <div id="templateSection">
+    <textarea id="templateTextarea"></textarea><br>
+    <button id="saveTemplateBtn">Guardar Plantilla</button>
+    <p>Placeholders permitidos: <code>{{meta.fecha}}</code>, <code>{{meta.rol}}</code>, <code>{{meta.contexto}}</code>, <code>{{meta.alias}}</code>, <code>{{#items}}</code>…<code>{{/items}}</code>, <code>{{item.testName}}</code>, <code>{{item.result}}</code>, <code>{{item.lado}}</code>, <code>{{item.area}}</code>, <code>{{item.fecha}}</code>.</p>
+  </div>
+
+  <h2>Informe Generado</h2>
+  <div id="reportSection">
+    <pre id="reportOutput"></pre>
+    <button id="downloadTxtBtn" disabled>Descargar TXT</button>
+    <button id="downloadPdfBtn" disabled>Descargar PDF</button>
+  </div>
+
+  <!-- jsPDF CDN for PDF generation -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+  <script>
+    // Polyfill SpeechRecognition for different browsers
+    window.SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+    let recognition;
+    let isRecording = false;
+    let items = [];
+    let template = "";
+
+    const startBtn = document.getElementById('startBtn');
+    const stopBtn = document.getElementById('stopBtn');
+    const finishBtn = document.getElementById('finishBtn');
+    const itemsList = document.getElementById('itemsList');
+    const templateTextarea = document.getElementById('templateTextarea');
+    const saveTemplateBtn = document.getElementById('saveTemplateBtn');
+    const reportOutput = document.getElementById('reportOutput');
+    const downloadTxtBtn = document.getElementById('downloadTxtBtn');
+    const downloadPdfBtn = document.getElementById('downloadPdfBtn');
+
+    // Default template
+    const defaultTemplate = `Fecha: {{meta.fecha}}\nRol: {{meta.rol}}\nContexto: {{meta.contexto}}\nPaciente: {{meta.alias}}\n\nResultados:\n{{#items}}- Prueba de {{item.testName}} — resultado {{item.result}}\n{{/items}}`;
+
+    function init() {
+      // Load saved template or default
+      const saved = localStorage.getItem('transcriphealth_template');
+      template = saved || defaultTemplate;
+      templateTextarea.value = template;
+
+      // Initialize SpeechRecognition
+      if ('SpeechRecognition' in window) {
+        recognition = new SpeechRecognition();
+        recognition.lang = 'es-CL';
+        recognition.continuous = true;
+        recognition.interimResults = false;
+        recognition.onresult = handleResult;
+        recognition.onend = () => {
+          if (isRecording) {
+            // Auto-restart recognition if recording is still active
+            recognition.start();
+          }
+        };
+      } else {
+        alert('API de Reconocimiento de Voz no soportada en este navegador.');
+      }
+    }
+
+    function handleResult(event) {
+      for (let i = event.resultIndex; i < event.results.length; i++) {
+        if (event.results[i].isFinal) {
+          const transcript = event.results[i][0].transcript.trim();
+          processTranscript(transcript);
+        }
+      }
+    }
+
+    function normalizeText(text) {
+      return text.toLowerCase().replace(/[¡!¿?]/g, '').trim();
+    }
+
+    function processTranscript(text) {
+      const normalized = normalizeText(text);
+      // Check finish command
+      if (normalized === 'fin de evaluación' || normalized === 'fin de evaluacion') {
+        finalizeEvaluation();
+        return;
+      }
+      // Parse test result
+      const match = /^prueba de\s+(.+?)\s*[,:]?\s*resultado\s+(.+)$/i.exec(text);
+      if (match) {
+        const testName = match[1].trim();
+        const result = match[2].trim();
+        const item = {
+          id: Date.now(),
+          testName: testName,
+          result: result,
+          lado: '',
+          area: '',
+          fecha: new Date().toLocaleString('es-CL')
+        };
+        items.push(item);
+        renderItems();
+      } else {
+        // Ignorar todo lo que no sea comando válido
+        console.log('Texto ignorado:', text);
+      }
+    }
+
+    function renderItems() {
+      itemsList.innerHTML = '';
+      items.forEach((item, index) => {
+        const div = document.createElement('div');
+        div.className = 'item';
+        const info = document.createElement('div');
+        info.className = 'info';
+        info.textContent = `${index + 1}. Prueba de ${item.testName} — resultado ${item.result}`;
+        const editBtn = document.createElement('button');
+        editBtn.textContent = 'Editar';
+        editBtn.className = 'edit';
+        editBtn.onclick = () => editItem(item.id);
+        const deleteBtn = document.createElement('button');
+        deleteBtn.textContent = 'Eliminar';
+        deleteBtn.onclick = () => deleteItem(item.id);
+        div.appendChild(info);
+        div.appendChild(editBtn);
+        div.appendChild(deleteBtn);
+        itemsList.appendChild(div);
+      });
+    }
+
+    function editItem(id) {
+      const item = items.find(it => it.id === id);
+      if (!item) return;
+      const newTestName = prompt('Editar nombre de la prueba:', item.testName) || item.testName;
+      const newResult = prompt('Editar resultado:', item.result) || item.result;
+      const newLado = prompt('Editar lado (opcional):', item.lado) || item.lado;
+      const newArea = prompt('Editar área (opcional):', item.area) || item.area;
+      item.testName = newTestName.trim();
+      item.result = newResult.trim();
+      item.lado = newLado.trim();
+      item.area = newArea.trim();
+      renderItems();
+    }
+
+    function deleteItem(id) {
+      items = items.filter(it => it.id !== id);
+      renderItems();
+    }
+
+    function generateReport() {
+      const meta = {
+        fecha: new Date().toLocaleString('es-CL'),
+        rol: '',
+        contexto: '',
+        alias: ''
+      };
+      // For simplicity, the app doesn't capture rol/context/alias via UI; placeholders will be empty unless user edits template manually.
+      let report = template;
+      // Replace meta placeholders
+      report = report.replace(/{{meta\.fecha}}/g, meta.fecha);
+      report = report.replace(/{{meta\.rol}}/g, meta.rol);
+      report = report.replace(/{{meta\.contexto}}/g, meta.contexto);
+      report = report.replace(/{{meta\.alias}}/g, meta.alias);
+      // Handle items block
+      // Find block boundaries
+      const blockRegex = /{{#items}}([\s\S]*?){{\/items}}/;
+      const blockMatch = blockRegex.exec(report);
+      let itemsRendered = '';
+      if (blockMatch) {
+        const blockTemplate = blockMatch[1];
+        items.forEach(item => {
+          let piece = blockTemplate;
+          piece = piece.replace(/{{item\.testName}}/g, item.testName);
+          piece = piece.replace(/{{item\.result}}/g, item.result);
+          piece = piece.replace(/{{item\.lado}}/g, item.lado);
+          piece = piece.replace(/{{item\.area}}/g, item.area);
+          piece = piece.replace(/{{item\.fecha}}/g, item.fecha);
+          itemsRendered += piece;
+        });
+        report = report.replace(blockRegex, itemsRendered);
+      }
+      // Remove any unresolved placeholders
+      report = report.replace(/{{[^}]+}}/g, '');
+      reportOutput.textContent = report;
+      downloadTxtBtn.disabled = items.length === 0;
+      downloadPdfBtn.disabled = items.length === 0;
+    }
+
+    function finalizeEvaluation() {
+      isRecording = false;
+      if (recognition) recognition.stop();
+      startBtn.disabled = false;
+      stopBtn.disabled = true;
+      generateReport();
+    }
+
+    function saveTemplate() {
+      template = templateTextarea.value;
+      localStorage.setItem('transcriphealth_template', template);
+      alert('Plantilla guardada.');
+    }
+
+    function downloadTxt() {
+      const text = reportOutput.textContent;
+      const blob = new Blob([text], { type: 'text/plain;charset=utf-8' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `informe_${new Date().toISOString()}.txt`;
+      a.click();
+      URL.revokeObjectURL(url);
+    }
+
+    function downloadPdf() {
+      const text = reportOutput.textContent;
+      const { jsPDF } = window.jspdf;
+      const doc = new jsPDF();
+      const lines = doc.splitTextToSize(text, 180);
+      doc.text(lines, 10, 10);
+      doc.save(`informe_${new Date().toISOString()}.pdf`);
+    }
+
+    // Event listeners
+    startBtn.addEventListener('click', () => {
+      if (!recognition) return;
+      isRecording = true;
+      items = [];
+      renderItems();
+      reportOutput.textContent = '';
+      downloadTxtBtn.disabled = true;
+      downloadPdfBtn.disabled = true;
+      recognition.start();
+      startBtn.disabled = true;
+      stopBtn.disabled = false;
+    });
+    stopBtn.addEventListener('click', () => {
+      isRecording = false;
+      if (recognition) recognition.stop();
+      startBtn.disabled = false;
+      stopBtn.disabled = true;
+    });
+    finishBtn.addEventListener('click', finalizeEvaluation);
+    saveTemplateBtn.addEventListener('click', saveTemplate);
+    downloadTxtBtn.addEventListener('click', downloadTxt);
+    downloadPdfBtn.addEventListener('click', downloadPdf);
+
+    init();
+  </script>
+</body>
+</html>
