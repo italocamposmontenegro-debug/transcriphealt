@@ -74,7 +74,25 @@
       white-space: pre-wrap;
       word-wrap: break-word;
     }
-  </style>
+  
+  #statusIndicator {
+  font-weight: bold;
+  margin-left: 10px;
+}
+#timer {
+  margin-left: 10px;
+  font-weight: bold;
+}
+.ready {
+  color: #047857;
+}
+.recording {
+  color: #B91C1C;
+}
+.paused {
+  color: #D97706;
+}
+</style>
 </head>
 <body>
   <h1>TranscripHealth</h1>
@@ -82,9 +100,12 @@
     <button id="startBtn">Iniciar Grabación</button>
     <button id="stopBtn" disabled>Detener Grabación</button>
     <button id="finishBtn">Finalizar Evaluación</button>
+        <span id="statusIndicator" class="ready">Listo</span>
+    <span id="timer">00:00</span>
   </div>
 
   <h2>Pruebas Registradas</h2>
+ 
   <div id="itemsList"></div>
 
   <h2>Plantilla del Informe (única)</h2>
@@ -120,6 +141,11 @@
     const reportOutput = document.getElementById('reportOutput');
     const downloadTxtBtn = document.getElementById('downloadTxtBtn');
     const downloadPdfBtn = document.getElementById('downloadPdfBtn');
+    const statusIndicator = document.getElementById('statusIndicator');
+const timerSpan = document.getElementById('timer');
+let timerInterval;
+let startTime;
+
 
     // Default template
     const defaultTemplate = `Fecha: {{meta.fecha}}\nRol: {{meta.rol}}\nContexto: {{meta.contexto}}\nPaciente: {{meta.alias}}\n\nResultados:\n{{#items}}- Prueba de {{item.testName}} — resultado {{item.result}}\n{{/items}}`;
@@ -309,7 +335,23 @@
       isRecording = true;
       items = [];
       renderItems();
+              // update status indicator and timer
+        statusIndicator.textContent = 'Grabando';
+        statusIndicator.className = '';
+        statusIndicator.classList.add('recording');
+        startTime = Date.now();
+        timerInterval = setInterval(() => {
+          const elapsed = Date.now() - startTime;
+          const seconds = Math.floor(elapsed / 1000) % 60;
+          const minutes = Math.floor(elapsed / 60000);
+          timerSpan.textContent = `${String(minutes).padStart(2,'0')}:${String(seconds).padStart(2,'0')}`;
+        }, 500);
+
       reportOutput.textContent = '';
+
+
+ 
+
       downloadTxtBtn.disabled = true;
       downloadPdfBtn.disabled = true;
       recognition.start();
@@ -321,11 +363,16 @@
       if (recognition) recognition.stop();
       startBtn.disabled = false;
       stopBtn.disabled = true;
+        statusIndicator.textContent = 'Pausado';
+  statusIndicator.className = '';
+  statusIndicator.classList.add('paused');
+  clearInterval(timerInterval);
     });
-    finishBtn.addEventListener('click', finalizeEvaluation);
-    saveTemplateBtn.addEventListener('click', saveTemplate);
-    downloadTxtBtn.addEventListener('click', downloadTxt);
-    downloadPdfBtn.addEventListener('click', downloadPdf);
+ finishBtn.addEventListener('click', finalizeEvaluation);
+saveTemplateBtn.addEventListener('click', saveTemplate);
+downloadTxtBtn.addEventListener('click', downloadTxt);
+downloadPdfBtn.addEventListener('click', downloadPdf);
+    
 
     init();
   </script>
